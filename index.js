@@ -11,14 +11,14 @@ app.use(cors());
 app.use(express.json());
 
 // firebae admin services initialize app
-const serviceAccount = require("./firebase-adminsdk-fbsvc-a0ce07fdf5.json");
+const serviceAccount = require("./jobbasket-p01-firebase-adminsdk-fbsvc-831f363520.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-const verifyFirebaseToken = async (req, res, next) => {
+// firebase token verification
+const verifyFireBaseToken = async (req, res, next) => {
   const authHeader = req.headers?.authorization;
-
   // check token access
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).send({ message: "unauthorized access" });
@@ -28,6 +28,7 @@ const verifyFirebaseToken = async (req, res, next) => {
   //verify token in firebase
   try {
     const decoded = await admin.auth().verifyIdToken(token);
+    // console.log("decoded token", decoded);
     req.decoded = decoded;
     next();
   } catch (error) {
@@ -35,6 +36,21 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
+// email verification
+const emailVerify = (req, res, next) => {
+  const email = req.query.email;
+  const firbaseEmail = req.decoded.email;
+
+  if (email !== firbaseEmail) {
+    return res.status(403).send({ message: "Forbidden access" });
+  }
+  next();
+};
+
+// MongoDB setup
+// MongoDB setup
+// MongoDB setup
+// MongoDB setup
 // MongoDB setup
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.eznirgn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -54,7 +70,7 @@ async function run() {
     const jobsCollection = client.db("jobportal").collection("jobs");
     const applicationsCollection = client
       .db("jobportal")
-      .collection("applicatoins");
+      .collection("application");
 
     // jobs api
     app.get("/jobs", async (req, res) => {
@@ -77,26 +93,29 @@ async function run() {
     //   res.send(result);
     // })
 
-    app.get("/jobs/applications", verifyFirebaseToken, async (req, res) => {
-      const email = req.query.email;
-      if (email !== req.decoded.email) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
-      const query = { hr_email: email };
-      const jobs = await jobsCollection.find(query).toArray();
+    app.get(
+      "/jobs/applications",
+      verifyFireBaseToken,
+      emailVerify,
+      async (req, res) => {
+        const email = req.query.email;
 
-      // should use aggregate to have optimum data fetching
-      for (const job of jobs) {
-        const applicationQuery = { jobId: job._id.toString() };
-        const application_count = await applicationsCollection.countDocuments(
-          applicationQuery
-        );
-        job.application_count = application_count;
-      }
-      res.send(jobs);
-    });
+        const query = { hr_email: email };
+        const jobs = await jobsCollection.find(query).toArray();
 
-    app.get("/jobs/:id", verifyFirebaseToken, async (req, res) => {
+        // should use aggregate to have optimum data fetching
+        for (const job of jobs) {
+          const applicationQuery = { jobId: job._id.toString() };
+          const application_count = await applicationsCollection.countDocuments(
+            applicationQuery
+          );
+          job.application_count = application_count;
+        }
+        res.send(jobs);
+      }
+    );
+
+    app.get("/jobs/:id", verifyFireBaseToken, emailVerify, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await jobsCollection.findOne(query);
@@ -110,47 +129,53 @@ async function run() {
     });
 
     // job applications related apis
-    app.get("/applications", verifyFirebaseToken, async (req, res) => {
-      const email = req.query.email;
+    app.get(
+      "/applications",
+      verifyFireBaseToken,
+      emailVerify,
+      async (req, res) => {
+        const email = req.query.email;
 
-      if (email !== req.decoded.email) {
-        return res.status(403).send({ message: "forbidden access" });
+        const query = {
+          applicant: email,
+        };
+        const result = await applicationsCollection.find(query).toArray();
+
+        // bad way to aggregate data
+        for (const application of result) {
+          const jobId = application.jobId;
+          const jobQuery = { _id: new ObjectId(jobId) };
+          const job = await jobsCollection.findOne(jobQuery);
+          application.company = job.company;
+          application.title = job.title;
+          application.company_logo = job.company_logo;
+        }
+
+        res.send(result);
       }
-      const query = {
-        applicant: email,
-      };
-      const result = await applicationsCollection.find(query).toArray();
-
-      // bad way to aggregate data
-      for (const application of result) {
-        const jobId = application.jobId;
-        const jobQuery = { _id: new ObjectId(jobId) };
-        const job = await jobsCollection.findOne(jobQuery);
-        application.company = job.company;
-        application.title = job.title;
-        application.company_logo = job.company_logo;
-      }
-
-      res.send(result);
-    });
+    );
 
     // app.get('/applications/:id', () =>{})
-    app.get("/applications/job/:job_id", verifyFirebaseToken, async (req, res) => {
-      const job_id = req.params.job_id;
-      // console.log(job_id);
-      const query = { jobId: job_id };
-      const result = await applicationsCollection.find(query).toArray();
-      res.send(result);
-    });
+    app.get(
+      "/applications/job/:job_id",
+      verifyFireBaseToken,
+      async (req, res) => {
+        const job_id = req.params.job_id;
+        // console.log(job_id);
+        const query = { jobId: job_id };
+        const result = await applicationsCollection.find(query).toArray();
+        res.send(result);
+      }
+    );
 
-    app.post("/applications",  async (req, res) => {
+    app.post("/applications", verifyFireBaseToken, async (req, res) => {
       const application = req.body;
       console.log(application);
       const result = await applicationsCollection.insertOne(application);
       res.send(result);
     });
 
-    app.patch("/applications/:id", async (req, res) => {
+    app.patch("/applications/:id", verifyFireBaseToken, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
       const updatedDoc = {
